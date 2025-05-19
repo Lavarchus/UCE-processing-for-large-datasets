@@ -1,0 +1,90 @@
+#!/bin/bash
+#PBS -j oe
+#PBS -m ae
+#PBS -N MitoFinder_taxa
+#PBS -l select=1:ncpus=20:mem=20gb
+#PBS -l walltime=5:00:00
+#PBS -M you.email@uni.com
+#PBS -J 0-67
+
+ncpu=$(qstat -f $PBS_JOBID | grep "Resource_List.ncpus" | cut -d= -f2 | sed 's/ //g') 
+s=$(if [ $ncpu == 1 ]; then echo ""; else echo "s"; fi)
+mem=$(qstat -f $PBS_JOBID | grep "Resource_List.mem" | cut -d= -f2 | sed 's/ //g')
+echo $(date)
+echo "------------------------------------------------------"
+echo "This job is allocated "$ncpu" CPU core$s and $mem on " cat $PBS_NODEFILE | uniq
+echo "------------------------------------------------------"
+echo "PBS: Submitted to $PBS_QUEUE@$PBS_O_HOST"
+echo "PBS: Working directory is $PBS_O_WORKDIR"
+echo "PBS: Job identifier is $PBS_JOBID"
+echo "PBS: Job name is $PBS_JOBNAME"
+echo "------------------------------------------------------"
+
+# Make sure required modules are discoverable and load them
+shopt -s expand_aliases
+source /etc/profile.d/modules.sh
+
+module load java/1.8.0
+module load blast/2.12.0
+module load spades/3.15.5
+
+
+############### MITOFINDER RUN 1 - ASSEMBLE & ANNOTATE MT CONTIGS ##############
+                #---- COMMENT OUT FOR RUN2 ----#
+
+# make output directory for MitoFinder results
+mkdir -p /path/to/MitoFinder_output
+cd /path/to/MitoFinder_output
+# get array index - adjust #PBS -J parameter in header to fit your sample size
+id=${PBS_ARRAY_INDEX}
+# Get list of species
+indirs=($(ls /path/to/trimmed_reads))
+# Get infile
+sample="${indirs[$id]}"
+# give path to paired-end reads
+r1=$(echo "/path/to/trimmed_reads/${sample}/${sample}-READ1.fastq.gz")
+r2=$(echo "/path/to/trimmed_reads/${sample}/${sample}-READ2.fastq.gz")
+
+# run MitoFinder with metaSPAdes assembler
+/patho/to/mitofinder --metaspades \
+        -j $sample \
+        -1 $r1 \
+        -2 $r2 \
+        -r mtDNA_reference_genomes.gb \
+        -o 2 \
+        -p 20 \
+        -t mitfi \
+        -e 0.000001 \
+        --min-contig-size 500 \
+        --max-memory 100 \
+        --new-genes 
+
+                #------------------------------#
+
+# If doing a second run then concatenate all the mt contigs from the first run for each species.
+# Only run search for introns and NUMTs is reference sequences are from closely related taxa (see details on https://github.com/RemiAllio/MitoFinder)
+
+############### MITOFINDER RUN 2 - ALLOW INTRONS AND NUMT DETECTION ##############
+## create a new output directory to store the results from the second round of MF
+# mkdir -p /path/to/MitoFinder_output2
+# cd /path/to/MitoFinder_output2
+# get array index
+# id=${PBS_ARRAY_INDEX}
+## get list of contig files from first MF run
+# indirs=($(ls /path/to/cat_contigs_MFRUN1))
+# sample="${indirs[$id]}"
+## give path to concatenated contigs from run 1
+#contigs="/path/to/cat_contigs_MFRUN1/$sample/${sample}_MFRUN1_mtDNA_contigs.fasta"
+## run mitofinder to search for genes with introns
+# mitofinder -j $sample \
+#         -a $contigs
+#         -r mtDNA_reference_genomes.gb \
+#         -o 2 \
+#         -p 20 \
+#         -m 40 \
+#         -t mitfi \
+#         --new-genes \
+#         --allow-intron \
+#         --intron-size 12000 \
+#         --cds-merge \
+#         --adjust-direction
