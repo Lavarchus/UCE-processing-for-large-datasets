@@ -1,175 +1,362 @@
 ## Description
 
-This repository describes a workflow to harvest and process partial and complete mitochondrial genomes from off-target reads of UCE captured data using MitoFinder (Allio et al. 2020) and MAFFT (Katoh & Standley, 2013). Associated data and publication are outlined in the Publication & Data section at the end of this repository.
+This repository outlines a workflow for processing UCE from targeted capture data with Phyluce (Faircloth, 2016) for large genomic datasets. Associated data and publication are outlined in the Publication & Data section at the end of this repository.
 <br>
+
+## Adapted steps from the original Phyluce pipeline for large genomic datasets
+
+Some steps can take a while to run within Phyluce, especially for large datasets, so I find it's best to go in and out of the original pipeline to process this type of data.
+Others steps can be facillitated by running easy shell scripts. This repository only goes through the steps that were adapted to run more efficiently on large datasets and does not go through the whole Phyluce pipeline. Please refer to the original Phyluce tutorial in parallel of running this workflow.
+
+* Assembling contigs
+* Structure your scripts and outputs
+* Generate configuration file to extract UCE loci
+* Prepare data to align UCE loci with MAFFT
+* Align UCE loci with MAFFT outside of Phyluce
+* Generate final alignment matrices
 
 ## Getting started
 
 ### Softwares and Data Requirements
 
-* MitoFinder #to extract mitochondrial genes from cleaned reads - see details on https://github.com/RemiAllio/MitoFinder
-* MAFFT (v7.505) #to generate alignments for e.g. phylogenetic inference
-* IQTREE #to conduct phylogenetic inferences
+* Phyluce v1.7.3 - to process UCE from targeted capture sequencing. See pipeline details on https://phyluce.readthedocs.io/en/latest/tutorials/tutorial-1.html
+* SPAdes v3.15 - to assemble contig
+* MAFFT v7.505 - to generate alignments for e.g. phylogenetic inference
+* IQTREE v2.2 - to conduct phylogenetic inferences
 <br><br>
-* reference_file.gb #containing mitochondrial genomes of reference - can be compiled from NCBI
-* left_reads.fastq.gz #containing the left reads of paired-end sequencing
-* right_reads.fastq.gz #containing the right reads of paired-end sequencing
-* or single-end reads
-
-## Running
-
-Before running MitoFinder, you want to make sure that the nomenclature of mitochondrial genes is consistent across reference genome annotations. For example, the control region gene can also be named d-loop or the COXII / COX2. Pick one and standardize them across using the sed command.
-
-```
-sed -i 's/control\ region/D-loop/g' /path/to/mtDNA_reference_genomes.gb
-# always run sed without the infile flag (-i) first to make sure that it looks good
-```
-
-### Extract mitochondrial data with MitoFinder
-
-Here UCE captured data was used and the default value for --min-contig-size being 1,000 bp is too high for the shorter off-target sequences so it needs to be adapted according to contig coverage. Same applies for --blast-size, which was reduced to e-value = 1e-06 (default 0.00001, 30%) following Allio et al (2019). This will allow you to get more hits and detect more genes. You can do multiple test runs with different values for these options to check how the output assemblies look like. Generally, the lower the contig size the more hits you might get but they are likely to yield more fragmented contigs so there is bit of a trade-off here depending on what data you are going for.
-
-```
-#run MitoFinder - there is also a pbs script associated with this repository (run_MitoFinder.pbs)
-to run MF as an array job on an HPC cluster and speed things up
-mitofinder --metaspades \ #you can also use megahit which is faster but I found that MetaSPAdes gives better assemblies
-    -j sample_name \
-    -1 paired_end_R1 \
-    -2 paired_end_R2 \
-    -r mtDNA_reference_genomes.gb \
-    -o 2 \ #organism type to specify genetic code, here for vertebrates
-    -p 20 \
-    -t mitfi \ # for tRNA annotation
-    -e 0.000001 \ #this parameter and the following --min-contig-size is what worked best for my UCE captured data
-    --min-contig-size 500 \
-    --max-memory 100 \
-    --new-genes
-```
-If the mitochondrial genome of your target organism contains introns and/or you want to look into nuclear mitochondrial DNA (NUMT), and have reference genomes from closely related species you can do a second of MitoFinder on the assemblies (--assembly) from the first run searching for introns (--allow-intron), specifying size (--intron-size) and preventing merging of exons (--cds-merge).
-
+* trimmed reads (left_reads.fastq.gz) - containing the left reads of paired-end sequencing
+* trimmed reads (right_reads.fastq.gz) - containing the right reads of paired-end sequencing
+* uce probe set (e.g. fish-uce-1k-probes.fasta)
 <br>
 
-### Tidy up and plot away
+### Assemble contigs with SPAdes
 
-When screening lots of samples for mitochondrial contigs, it might be useful to do some tidying up and take advantage of this to generate a summary log file for the results
+Before assembling your contigs, reads should have been trimmed from adapters and quality controlled (e.g. using FastQC).
+This step will take some time to run, so let's run it as an array job to basically duplicate the job and process multiple samples in parallel.
+To create an array job in you need to add the PBS directive -J followed by the number of samples or indices in the script PBS header. It will look something like this:
 
 ```
-# Make a new directory to store mt contigs
-mkdir -p path/to/mt_contigs_MFRUN1
+#!/bin/bash #specifies that the script should be executed using the Bash shell
+#PBS -c s #if your environment supports job restart from checkpoints
+#PBS -j oe #join standard output and standard error into a single file. This is useful for consolidating job logging
+#PBS -m bae  #mail event - send me an email when job b(egins), a(lts/crashes), e(xits/finishes)
+#PBS -M lauriane.baraf@my.jcu.edu.au #email recipient
+#PBS -N name_job
+#PBS -l select=1:ncpus=10:mem=20gb #amount of resources requested
+#PBS -l walltime=08:00:00 #time allocated to run the job
+#PBS -J 0-99
+set -e #exit the script immediately if any command returns a non-zero (error) exit code. Useful Bash settings that helps catch failures early
 
-# go to MitoFinder output result folder - it should be folders named after target species 
-cd /path/to/MitoFinder/output
-for dir in */*_MitoFinder_mitfi_Final_Results; do
-    sp=$(echo $dir | cut -d/ -f1) #store species name
-# this loop first checks if any mt contigs were found
-    if [ -z "$(ls -A "$dir")" ]; then
-        echo "$sp: MitoFinder didn't find any mt contigs." >> ../MF_results.log
+shopt -s expand_aliases #allows use of aliases in the script
+source /etc/profile.d/modules.sh #makes environment module system discoverable
+```
+Note that a -J directive needs to match both the number of samples to run but also how the job scheduler is set up.
+The above example is for a PBS script to be submitted on a shared cluster, which in my case, is set to run a maximum of 100 duplicated jobs so a 100 samples. The -J directive here has a range of indices from 0-99 and that's because in the system I am using 0 counts as 1. Different HPC clusters might have different array job parameters.
+To check your cluster-specific limits on array jobs you can use command-line tools:
+
+```
+# For PBS and TORQUE job schedulers
+qmgr -c 'p s' | grep array
+
+# For SLURM
+scontrol show config | grep -i array
+```
+
+Now that the PBS job header is all set up properly, we can work on the rest of the script to run SPAdes. It will spit out a lot of heavy intermediate files while running so if you can, I recommend using a temporary directory to avoid overloading your storage. Then redirect only the final output to your output directory.
+
+```
+# load SPAdes
+module load spades/3.15.5
+
+# Get job index from the PBS job array (e.g., if -J 0-99 is used, this will be 0 through 99). 
+id=${PBS_ARRAY_INDEX}
+
+# Create an array of all folder names (each corresponding to a sample) in the input directory.
+# Each sample directory should contain the trimmed paired-end FASTQ files for that sample.
+READS_DIRS=($(ls /path/to/trimmed/reads/directory))
+
+# Get the sample name based on the array index, basically linking the two together.
+SAMPLE_NAME=${READS_DIRS[$id]}
+
+# Define paths to paired-end trimmed forward (1) and reverse (2) read files
+R1=$(echo "/path/to/trimmed/reads/directory/${SAMPLE_NAME}/${SAMPLE_NAME}-READ1.fastq.gz")
+R2=$(echo "/path/to/trimmed/reads/directory/${SAMPLE_NAME}/${SAMPLE_NAME}-READ2.fastq.gz")
+
+# Define directories
+OUT_DIR="/path/to/where/to/store/spades_assemblies" #to store final output
+TMP_DIR="/path/to/temporary/directory #to store heavy intermediate files
+
+# Run SPAdes
+spades -1 ${R1} -2 ${R2} --careful --threads 10 --cov-cutoff 2 --tmp-dir ${TMP_DIR} -o ${OUT_DIR}/${SAMPLE_NAME}
+```
+
+Once the job has finished, let's make sure that SPAdes actually successfully ran for all samples. Even if you get an Exit=0 job, it's good to check that there are not some cryptic run errors, especially when you have many samples. Thankfully, SPAdes is a very polite tool that will append the line "Thank you for using SPAdes!" to the log file when it has finished running successfully.
+Let's use this to our advantage:
+
+```
+# Initialize counter to keep track of the number of files containing the string. Optional but a fun feature to use.
+count=0
+
+# Loop through all matching log files
+for file in path/to/logs/jobname_SPADES.*; do
+    # Check if the file exists to avoid errors when no matches are found
+    [[ -e "$file" ]] || continue
+
+    # Check if the success message is present
+    if grep -q 'Thank you for using SPAdes!' "$file"; then
+        ((count++))  # add +1 to count if successful count
     else
-        # if there are mt contigs for the species then let's create a directory for it
-        mkdir -p path/to/mt_contigs_MFRUN1/$sp
-        outdir="path/to/mt_contigs_MFRUN1/$sp"
-        # Now we want to know if the retreived assemblies are fragmented or not. Up to you to keep one or the other or both
-        if [ -f $dir/${sp}_mtDNA_contig.fasta ]; then
-                echo "$sp: potentially complete mitchondrial genome found by MitoFinder." >> ../MF_results.log
-                cat $sp/${sp}_MitoFinder_mitfi_Final_Results/${sp}_mtDNA_contig.fasta >> $outdir/${sp}_MFRUN1_mtDNA_contigs.fasta
-            else
-                echo "$sp: fragmented or partial mt genome found by MitoFinder." >> ../MF_results.log
-                # concatenate all the mt contigs together. You can comment this part of if you are not interested in fragmented assemblies.
-                cat $sp/${sp}_MitoFinder_mitfi_Final_Results/${sp}_mtDNA_contig_[1-9].fasta >> $outdir/${sp}_MFRUN2_mtDNA_contigs.fasta
-        fi
+        # Print a message to rerun SPAdes for the sample
+        echo "Error found in SPAdes run for sample $(basename "$file")"
     fi
 done
 
+# Check that the count matches the number of samples
+echo "Total successful SPAdes runs: $count"
 ```
 
-With prior knowledge on the expected length of your species mitochondrial genomes, you can estimate approximately how many potential whole genomes were retrieved by roughly estimating the length of the assembly from the new output files we just created
+If all your assemblies ran successfully, we can create symbolic links and store them in a new directory with sample names.
 
 ```
-for contigs in mt_contigs_MFRUN1/*/*.fasta; do
-    sp=$(basename "$contigs" _MFRUN1_mtDNA_contigs.fasta) # store species names
-    length=$(awk '/^>/ {next} {letters += length} END {print letters}' "$contigs") # calculate approx. length by counting number of base pairs
-    echo -e "$sp\t$length"
-done | sort -k2,2nr # sort by decreasing order of length
-```
-
-Maybe you want to plot the results of your MitoFinder run(s) so let's generate a csv file to input in R.
-
-```
-MF_output="/path/to/MitoFinder/output
-csv_output="total_MF_genes.csv"
-
-#Create header for the output csv file
-echo -e "Species\tGenes\tCount" > "$csv_output"
-
-for fasta in "$MF_output"/*/*_MitoFinder*_Final_Results/*_final_genes_NT.fasta; do
-    sp=$(basename "${fasta%_final_genes_NT.fasta}") #store species name
-# this loop checks if the genes listed in the text file gene_list.txt are present in the final genes found by MitoFinder. It gives it a "1" for yes and a "0" for no to create a presence/absence matrix
-    while read -r line; do
-        if grep -qwF "$line" "$fasta"; then
-            present=1
-        else
-            present=0
-        fi
-        echo -e "$sp\t$line\t$present" >> "$csv_output"
-    done < "genes_list.txt"
+# Loop through all the SPAdes output directories - they should be named with the respective sample names (*), the assembled contigs are stored in the file contigs.fasta
+for fasta in /path/to/where/to/stored/spades_assemblies/*/contigs.fasta; do
+    # get sample name (cut -d/ -f9) and replace underscore in sample names to hyphens (sed 's/_/-/g') because Phyluce is a bit finicky when it comes to names
+        sample=$(echo ${fasta} | cut -d/ -f9 | sed 's/_/-/g') # adapt -f to number of / in your file path
+    # always check that it looks good before running anything else
+        #echo ${sample}
+    # create symbolic link to assembled contigs into new contig directory
+        ln -s ${fasta} /path/to/new/contig/directory/${sample}.contigs.fasta
 done
 ```
 
-Next step is if you want to generate alignments to infer a phylogenetic tree for example. To do so, we need to extract the different mt genes for each species and store them fasta files that we can then align. The script I used is pretty old and to be honest, quite horrendous, but it works fine and eventually I will spend time on it to clean it up. Until then, it probably is best to run it as a bash script (see extract_mt_genes.sh in repository material).
-
-A few things you'll need to change in the extract_mt_gene.sh script to fit your directory setup
-
-```
-# Define the root directory containing the species subdirectories (line 9)
-root_directory="/path/to/MitoFinder/output"
-
-# Define the output root directory (line 12)
-output_root_directory="/path/to/extracted_mt_genes"
-
-# Define taxa name - something that makes sense to your data e.g. if you are doing multiple species from one family you can use the family name (line 21)
-taxa="dragons"
-
-# If you want to subset for specific taxon afterwards, uncomment the lines 106-114 to allow the taxa filtering to run (it is turned off by default). You also need to specify a species list and an output directory (lines 24-25)
-taxonset="/path/to/species_list.txt"
-filtered_output="/path/to/filtered_taxa_output"
-
-# Once you've adapted the script to your setup, make sure it is executable before running it
-chmod +x extract_mt_gene.sh # add execute permission to script
-./extract_mt_genes.sh --quiet # run script
-
-```
-
-Output should contain
-  * 15 directories named ${taxa}_${gene} containing subdirectories with sequences for each species
-  * 15 fasta files named all_${taxa}_${gene}.fasta containing sequences of all species for each gene separately
-  * 1 log file named ${taxa}_extract_mt_genes.log
+This new directory containing assembled contig fasta files for all samples can now be inputted in Phyluce to find UCE loci by matching the contigs to a UCE probe set using the command _phyluce_assembly_match_contigs_to_probes_.
 
 <br>
 
-### Align mitochondrial genes with MAFFT
+### Match contigs to UCE probe and locate UCE loci
 
-Now that we have concatenated all sequences into fasta files for individual mt genes, we can finally align them! This is an example of an easy loop that will generate alignments for each genes using the MAFFT aligner with default parameters. Best is probably to submit it as a job on a HPC cluster as MAFFT can take a while to run.
+This step is similar to the one outlined in the Phyluce pipeline (see https://phyluce.readthedocs.io/en/latest/tutorials/tutorial-1.html#finding-uce-loci).
+I only want to share an example of how you can structure and organise your scripts and outputs to avoid file-margeddon in your directories.
 
 ```
-# load mafft aligner
-module load mafft
+# load Phyluce
+module load phyluce
 
-# create output directory
-mafft_out="/path/to/mafft_out"
-mkdir -p $mafft_out
+# Storing paths to the new contig directory and UCE probe will be useful to keep at the top of your scripts because you will reuse them down the Phyluce piepline.
+CONTIGS="/path/to/new/contig/directory"
+UCE_PROBE="/path/to/fish-uce-1k-probes.fasta"
 
-for i in /path/to/all_${taxa}_${gene}.fasta; do
-    gene=$(basename "$i" .fasta | cut -d_ -f3) # store gene name
-    # align mt genes using mafft aligner
-    mafft --auto --thread 10 "$i" > ${mafft_out}/${taxa}_${gene}_mafft_alignment.fasta
-    # clean loci name from alignments
-    sed -i 's/@.*$//' ${mafft_out}/${taxa}_${gene}_mafft_alignment.fasta
+# Create a directory to store all the log files that Phyluce will produce. It keeps things tidy and accessible.
+mkdir -p /path/to/phyluce_output/logs
+LOGS="/path/to/phyluce_output/logs"
+
+# Go to the directory where you want the Phyluce outputs to be stored
+cd /path/to/phyluce_output/
+
+# Find UCE loci
+phyluce_assembly_match_contigs_to_probes \
+     --contigs ${CONTIGS} \
+     --probes ${UCE_PROBE} \
+     --output 3_uce_search_results \
+     --log-path ${LOGS}
+```
+
+Note that my output directory containing UCE loci matches is labelled as the 3rd step in my workflow. This is optional and one way of organising your outputs.
+My UCE processing directory looks something like this:
+
+* 1_trimmed_reads #directory containing all trimmed reads and FastQC results
+* 2_assemblies #directory containing all assemblies
+* 3_UCE #directory containg UCE search results
+* 4_mapping #directory containing mapping results (optional)
+* 5_phasing #directory containing phased UCE loci (optional)
+* 6_correction #directory containing corrected contigs (optional)
+* 7_alignments #directory containing final alignments
+
+Speaking of output directory, make sure that when you are running a Phyluce command, the output directory does not exist, especially if rerunning a command.
+Example: if you want to have your UCE hits stored in a separate directory within a UCE search directory such as 3_uce_search_results/dragonidae - you should only create the /3_uce_search_results directory and Phyluce will create the /dragonidae directory when you specify --output 3_uce_search_results/dragonidae
+
+<br>
+
+### Extract UCE loci
+
+To run this step, Phyluce requires a configuration file that lists names of the taxa/samples you want to extract UCE loci for. Let's run a small loop to quickly create it using the assembled contigs directories conviniently named after sample's names.
+
+```
+# Create a configuration file and add required header
+echo "[all]" > 3_uce_search_results/dragonidae_taxonset.conf
+# To run it for all Dragonidae samples let's loop through the assembled contig directories to get names
+for dir in 2_assemblies/*; do
+    # don't forget that we have the directory containing all the assembled contigs too, so let's skip this one
+    if [ "$dir" != "all_contigs" ]; then
+        sample=$(basename "$dir")
+        echo $sample >> 3_uce_search_results/dragonidae_taxonset.conf
+    fi
 done
 ```
 
-That's it! After trimming your alignments with programs like trimAl or clipKIT you can now use them in downstream analyses e.g. phylogenetic inference
-Best fishes and happy coding!
+You can now run the Phyluce command _phyluce_assembly_get_match_counts_ using this configuration file and keep following the pipeline. Let's meet after you have generated exploded fasta files for each of your samples.<br>
+If you are going down the Mapping, Phasing and Correction route - there are some helpful scripts in the **/ScriptCraft repository**.
+
+<br>
+
+### Prepare data to align UCE loci with MAFFT
+
+Phyluce implements mafft and muscle aligners but it takes a while to run if you have large datsets so let's run it with MAFFT directly instead.
+First, we need to explode the monolithic fasta files by loci rather than taxon, which is the default output format of the command _phyluce_assembly_explode_get_fastas_file_
+
+```
+phyluce_assembly_explode_get_fastas_file \
+    --input /3_uce_search_results/all-taxa-incomplete.fasta \
+    --output /3_uce_search_results/exploded_fastas_by_loci
+```
+
+If at this point you want to subset your dataset to keep only specific taxa in your final alignments, you can parse your fasta directories exploded by taxon how you'd like them to be. Best is to create new directories with symbolink links to target exploded files. Then run the script ./by_loci_from_exploded_taxa.sh from the **/ScriptCraft repository**.
+
+Now that the UCE loci are exploded into separate fasta files, let's align the sequences within each files with MAFFT.
+
+<br>
+
+### Align UCE with MAFFT outside of Phyluce
+
+You can reuse a similar PBS directive header as described in step 1 (assemble contigs). Add the following code to your PBS script, it looks more complicated than it is, there are a couple of extra control/checkpoints that are useful when you are working with lots of UCE loci.
+
+```
+# load MAFFT aligner
+module load mafft
+
+## Variables to adapt to your run ##
+# Resources - must match the PBS directive
+THREADS="10"
+# if you have multiple set of taxa you can run the following script and just change the BATCH variable
+BATCH="dragonidae"
+# Create output directories and where to store MAFFT log file
+OUTDIR="/path/to/7_alignments"
+mkdir -p ${OUTDIR}/${BATCH}/{out_mafft,logs}
+LOG=${OUTDIR}/${BATCH}/logs/mafft.log
+# Set path to directory containing fasta file exploded by loci
+IN="/path/to/3_uce_search_results/${BATCH}/exploded_fastas_by_loci/
+
+
+echo "----- RUNNING MAFFT ALIGNMENT -----" >> ${LOG}
+echo "----- RUNNING MAFFT ALIGNMENT -----"
+
+for fasta in ${IN}/*.unaligned.fasta; do
+  uce=$(basename "$fasta" .unaligned.fasta)
+
+  # Count sequences in fasta files - mafft will stop running if there is only 1 sequence
+  nseqs=$(grep -c "^>" ${fasta})
+
+  if [ "$nseqs" -le 1 ]; then
+    echo "${uce}: was not be aligned because contained only 1 sequence." >> ${LOG}
+    continue #this makes sure that fasta files with only sequence will be skipped
+  fi
+
+  # Run MAFFT
+  output_file=${OUTDIR}/${BATCH}/out_mafft/${uce}.fasta
+  mafft --auto --thread ${THREAD} ${fasta} > ${output_file}
+
+  # Check success
+  if [ $? -eq 0 ]; then
+    echo "${uce}: successfully aligned." >> "$LOG"
+  else
+    rm -f "$output_file"
+    echo "Error: MAFFT failed to align $uce. File was removed from output directory." >> "$LOG"
+  fi
+done
+
+echo "----- MAFFT ALIGNMENT COMPLETED -----" >> ${LOG}
+echo "----- MAFFT ALIGNMENT COMPLETED -----"
+```
+
+Output directory should contain uce-number.fasta files with aligned sequences that can be inputted back into the Phyluce pipeline.
+
+<br>
+
+### Generate final alignment matrices
+The commands below can be run back to back as a PBS script (make sure to have the set -e Bash setting in) pretty quickly and generally follow the Phyluce pipeline with some modifications, mainly for trimming-algorithm and checking for alignments issues.
+
+```
+# Load Phyluce
+module load phyluce
+
+# Give path to MAFFT alignment directory
+ALN="${OUTDIR}/${BATCH}/out_mafft"
+# Create and set path to log file
+mkdir -p ${OUTDIR}/${BATCH}/logs
+LOGS="{OUTDIR}/${BATCH}/logs"
+# Get number of taxa for the final alignments from fasta files exploded by taxon
+NTAX=$(ls /path/to/3_uce_search_results/exploded_fastas_by_taxon | wc -l)
+
+# Go to output directory
+cd ${OUTDIR}
+
+# Clean  mafft alignments (remove locus names)
+echo "----- Running: Removing locus name from alignments -----"
+phyluce_align_remove_locus_name_from_files \
+    --alignments ${ALN} \
+    --output ${OUTDIR}/${BATCH}/1_mafft_clean \
+    --input-format fasta \
+    --output-format nexus \
+    --${LOGS} \
+    --cores 10
+
+# Screen alignments for problems before any trimming
+echo "----- Running: Screening Alignments for problems -----"
+phyluce_align_screen_alignments_for_problems \
+    --alignments ${OUTDIR}/${BATCH}/1_mafft_clean \
+    --output ${OUTDIR}/${BATCH}/2_mafft_screened \
+    --input-format nexus \
+    --log-path ${LOGS} \
+    --cores 10
+
+# Remove taxa with no data from the screened alignments
+echo "----- Running: Removing Empty Taxa -----"
+phyluce_align_remove_empty_taxa \
+    --alignments ${OUTDIR}/${BATCH}/2_mafft_screened \
+    --output ${OUTDIR}/${BATCH}/3_mafft_filtered \
+    --input-format nexus \
+    --output-format nexus \
+    --log-path ${LOGS} \
+    --cores 10
+
+# Edge trim filtered - for taxa that diverged more recently (< 30-50 mya)
+echo "----- Running: Edge trimming on filtered alignments -----"
+phyluce_align_get_trimmed_alignments_from_untrimmed \
+    --alignments ${OUTDIR}/${BATCH}/3_mafft_filtered \
+    --output ${OUTDIR}/${BATCH}/4_mafft_edge_trimmed \
+    --input-format nexus \
+    --log-path ${LOGS} \
+    --cores 10
+
+# Internal trimming with Gblocks is not supported anymore. Use TrimAl instead, which is an in between edge and internal trimming.
+#echo "----- Running: Trimming filtered alignments with trimal -----"
+#phyluce_align_get_trimal_trimmed_alignments_from_untrimmed \
+#  --alignments ${OUTDIR}/${BATCH}/3_mafft_filtered \
+#  --output ${OUTDIR}/${BATCH}/4_mafft_trimal_trimmed \
+#  --input-format nexus \
+#  --log-path ${LOGS} \
+#  --cores 10
+
+# Generate summary data csv file to get stats for trimmed alignments
+phyluce_align_get_align_summary_data \
+    --alignments ${OUTDIR}/${BATCH}/4_mafft_edge_trimmed \
+    --cores 10 \
+    --output-stats ${OUTDIR}/${BATCH}/mafft_edge_summary.csv
+
+# Generate 75% complete alignment matrix from trimmed alignments
+phyluce_align_get_only_loci_with_min_taxa \
+    --alignments ${OUTDIR}/${BATCH}/4_mafft_edge_trimmed \
+    --taxa $NTAX \
+    --percent 0.75 \
+    --output ${OUTDIR}/${BATCH}/${BATCH}_e75 \
+    --log-path ${LOGS} \
+    --cores 10
+```
+
+You've made it!! Final alignments can now be used in your downstream bioinformatic endeavours like infering phylogenomic trees.<br>
+**Best fishes and happy coding!**
 <br><br>
+
 ## Help
 
 If you have any issues running the command lines or scripts in this repo feel free to reach out! - lauriane.baraf@my.jcu.edu.au
@@ -180,8 +367,11 @@ If you have any issues running the command lines or scripts in this repo feel fr
 
 Scripts were written by Lauriane Baraf, please cite this repo if using them.
 
-If using MitoFinder, please cite:<br>
-Allio, R., Schomaker‐Bastos, A., Romiguier, J., Prosdocimi, F., Nabholz, B., & Delsuc, F. (2020). MitoFinder: Efficient automated large‐scale extraction of mitogenomic data in target enrichment phylogenomics. Molecular Ecology Resources, 20(4), 892-905.
+If using the Phyluce processing pipeline, please cite:<br>
+BC Faircloth, McCormack JE, Crawford NG, Harvey MG, Brumfield RT, Glenn TC. 2012. Ultraconserved elements anchor thousands of genetic markers spanning multiple evolutionary timescales. Systematic Biology 61: 717–726. doi:10.1093/sysbio/SYS004.
+
+If using SPAdes please cite:<br>
+Prjibelski, A., Antipov, D., Meleshko, D., Lapidus, A., & Korobeynikov, A. (2020). Using SPAdes de novo assembler. Current protocols in bioinformatics, 70(1), e102.
 
 If using MAFFT v7, please cite:<br>
 Katoh, K., & Standley, D. M. (2013). MAFFT multiple sequence alignment software version 7: improvements in performance and usability. Molecular biology and evolution, 30(4), 772-780.
@@ -190,9 +380,10 @@ Katoh, K., & Standley, D. M. (2013). MAFFT multiple sequence alignment software 
 
 ## Publication & Data
 
-This repository contains the code initially written to extract mitochondrial data from off-target reads for the reef-associated fish family Pomacanthidae (marine angelfishes). Results are presented in the following publication:<br>
-Baraf et al. (2024). Comparative mitogenomics of marine angelfishes (F: Pomacanthidae). Ecology and Evolution, 14(8), e70127.
+This repository contains some of the code initially written to process UCE data harvested from targeted capture sequencing for the reef-associated fish family Pomacanthidae (marine angelfishes). Results are presented in the following publication:<br>
+Baraf, L. M., Hung, J. Y., & Cowman, P. F. (2025). Phylogenomics of marine angelfishes: diagnosing sources of systematic discordance for an iconic reef fish family (F: Pomacanthidae). Systematic Biology, syaf016.
 
-Associated complete mitogenomes for pomacanthid sepcimens are available on GenBank under the accession numbers PP316124-PP316129.
+Associated raw sequencing data is available on the NCBI GenBank Database under the BioProject PRJNA1101094
+Alignments and tree files can be accessed on the Dryad repository 10.5061/dryad.r4xgxd2n4
 
 
