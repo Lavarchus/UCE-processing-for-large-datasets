@@ -1,0 +1,51 @@
+#!/bin/bash
+#PBS -c s
+#PBS -j oe
+#PBS -m ae
+#PBS -N job_name
+#PBS -l select=1:ncpus=12:mem=20gb
+#PBS -l walltime=30:00:00
+#PBS -M email@address.au
+#PBS -J 0-99
+
+ncpu=$(qstat -f $PBS_JOBID | grep "Resource_List.ncpus" | cut -d= -f2 | sed 's/ //g') 
+s=$(if [ $ncpu == 1 ]; then echo ""; else echo "s"; fi)
+mem=$(qstat -f $PBS_JOBID | grep "Resource_List.mem" | cut -d= -f2 | sed 's/ //g')
+echo $(date)
+echo "------------------------------------------------------"
+echo "This job is allocated "$ncpu" CPU core$s and $mem on "
+cat $PBS_NODEFILE | uniq
+echo "------------------------------------------------------"
+echo "PBS: Submitted to $PBS_QUEUE@$PBS_O_HOST"
+echo "PBS: Working directory is $PBS_O_WORKDIR"
+echo "PBS: Job identifier is $PBS_JOBID"
+echo "PBS: Job name is $PBS_JOBNAME"
+echo "------------------------------------------------------"
+
+shopt -s expand_aliases
+source /etc/profile.d/modules.sh 
+
+# load SPAdes
+module load spades/3.15.5
+
+# Get job index from the PBS job array (e.g., if -J 0-99 is used, this will be 0 through 99). 
+id=${PBS_ARRAY_INDEX}
+
+# Create an array of all folder names (each corresponding to a sample) in the input directory.
+# Each sample directory should contain the trimmed paired-end FASTQ files for that sample.
+READS_DIRS=($(ls /path/to/trimmed/reads/directory))
+
+# Get the sample name based on the array index, basically linking the two together.
+SAMPLE_NAME=${READS_DIRS[$id]}
+
+# Define paths to paired-end trimmed forward (1) and reverse (2) read files
+R1=$(echo "/path/to/trimmed/reads/directory/${SAMPLE_NAME}/${SAMPLE_NAME}-READ1.fastq.gz")
+R2=$(echo "/path/to/trimmed/reads/directory/${SAMPLE_NAME}/${SAMPLE_NAME}-READ2.fastq.gz")
+
+# Define directories
+OUT_DIR="/path/to/where/to/store/spades_assemblies" #to store final output
+TMP_DIR="/path/to/temporary/directory #to store heavy intermediate files
+
+# Run SPAdes
+spades -1 ${R1} -2 ${R2} --careful --threads 10 --cov-cutoff 2 --tmp-dir ${TMP_DIR} -o ${OUT_DIR}/${SAMPLE_NAME}
+
