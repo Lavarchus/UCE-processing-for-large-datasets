@@ -253,7 +253,7 @@ for fasta in ${IN}/*.unaligned.fasta; do
 
   # Run MAFFT
   output_file=${OUTDIR}/${BATCH}/out_mafft/${uce}.fasta
-  mafft --auto --thread ${THREAD} ${fasta} > ${output_file}
+  mafft --auto --thread ${THREADS} ${fasta} > $output_file
 
   # Check success
   if [ $? -eq 0 ]; then
