@@ -210,7 +210,27 @@ phyluce_assembly_explode_get_fastas_file \
     --output /3_uce_search_results/exploded_fastas_by_loci
 ```
 
-If at this point you want to subset your dataset to keep only specific taxa in your final alignments, you can parse your fasta directories exploded by taxon how you'd like them to be. Best is to create new directories with symbolink links to target exploded files. Then run the script ./by_loci_from_exploded_taxa.sh from the **/ScriptCraft repository**.
+You might want to subset your dataset to keep only specific taxa in your final alignments, here is a good time to do it. So instead of running _phyluce_assembly_explode_get_fastas_file_ with the default setting (--by-locus), let's explode it by taxon first:
+
+```
+phyluce_assembly_explode_get_fastas_file \
+    --input /3_uce_search_results/all-taxa-incomplete.fasta \
+    --output /3_uce_search_results/exploded_fastas_by_taxon \
+    --by-taxon
+```
+
+You can then store and create subsets of this directory for different sets of taxa before exploding them by loci. Best is to create new directories with symbolink links to target exploded files. Maybe you did lots of independent runs and you end up with several exploded-fastas directories with many different samples in it, there is a useful script that will search through all your exploded-fastas directories and symlink all the unaligned fasta files from list of taxa ./filter_exploded_taxa.sh in the **/ScriptCraft repository**.
+
+Once you have your final exploded-fastas by taxon directory, let's concatenated all of those into a new fasta file and get exploded fasta files by loci
+```
+# Concatenated all exploded-fastas into one file
+cat /3_uce_search_results/exploded_fastas_by_taxon/*.nexus >> /3_uce_search_results/all_taxa.fasta
+
+# Parse concatenated fasta file into multiple by locus fasta files
+phyluce_assembly_explode_get_fastas_file \
+    --input /3_uce_search_results/all_taxa.fasta \
+    --output /3_uce_search_results/exploded_fastas_by_loci
+```
 
 Now that the UCE loci are exploded into separate fasta files, let's align the sequences within each files with MAFFT.
 
