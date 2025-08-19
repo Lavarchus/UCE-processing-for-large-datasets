@@ -13,6 +13,7 @@ Others steps can be facillitated by running easy shell scripts. This repository 
 * Generate configuration file to extract UCE loci
 * Prepare data to align UCE loci with MAFFT
 * Align UCE loci with MAFFT outside of Phyluce
+* Correct trimmed alignments with CIAlign
 * Generate final alignment matrices
 
 ## Getting started
