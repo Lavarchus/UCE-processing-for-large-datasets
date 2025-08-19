@@ -317,7 +317,7 @@ phyluce_align_remove_locus_name_from_files \
     --output ${OUTDIR}/${BATCH}/1_mafft_clean \
     --input-format fasta \
     --output-format nexus \
-    --${LOGS} \
+    --log-path ${LOGS} \
     --cores 10
 
 # Screen alignments for problems before any trimming
@@ -371,6 +371,44 @@ phyluce_align_get_only_loci_with_min_taxa \
     --output ${OUTDIR}/${BATCH}/${BATCH}_e75 \
     --log-path ${LOGS} \
     --cores 10
+```
+
+We're almost there! You could actually stop here and use those alignments, lots of people do. I guess the best advice I can give here is to visually inspect your alignments in Geneious or Jalview. Often you'll see that those alignment trimmers did an okay job but it could be better, especially when you are working with lots of loci. You could manually curate your alignments but if you have many of them and want to preserve your mental health there's this really cool program called CIAlign that corrects alignments and you can even see the changes it's done to your data!
+
+
+### Correct trimmed alignments with CIAlign
+```
+module load cialign/1.1.0
+module load phyluce
+
+OUTDIR="/path/to/7_alignments"
+mkdir -p $OUTDIR/cialign
+
+# Input alignments - must be in fasta format - you can use the phyluce_align_convert_one_align_to_another function to do that.
+
+IN_FASTA="/path/to/corrected_i75_aln_fasta"
+OUT_ALN="$OUTDIR/7_alignments/cialign"
+
+# Run CIAlign - have a look at https://cialign.readthedocs.io/en/latest/
+counter=0
+
+for file in $IN_FASTA/*.fasta; do
+  uce=$(basename "$file" .fasta)
+  CIAlign --infile ${file} --outfile $OUT_ALN/CIAlign_${uce}.fasta --clean --visualise --interpret 
+  ((counter++))
+  echo $counter
+done
+
+echo "-------- Finished running CIAlign --------"
+
+# Put all the corrected alignments together
+mkdir -p $OUT_ALN/all_cialign_alns
+for file in $OUT_ALN/*_cleaned.fasta; do
+  uce=$(basename $file .fasta_cleaned.fasta | cut -d_ -f2)
+  ln -s $file $OUT_ALN/all_cialign_alns/${BATCH}_${uce}_CIAlign.fasta
+done
+
+# Last step! Rerun internal (phyluce_align_get_gblocks_trimmed_alignments_from_untrimmed) or edge trimming (phyluce_align_get_trimmed_alignments_from_untrimmed) on $OUT_ALN/all_cialign_alns 
 ```
 
 You've made it!! Final alignments can now be used in your downstream bioinformatic endeavours like infering phylogenomic trees.<br>
