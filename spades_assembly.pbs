@@ -66,7 +66,7 @@ if spades -1 "$r1" -2 "$r2" \
     --careful \
     --threads "$ncpu" \
     --cov-cutoff 2 \
-    --tmp-dir "/tmp/jc452792" \
+    --tmp-dir "/path/to/temporary_directory" \
     -o "$OUTDIR/$SAMPLE_NAME"; then
 
     end_time=$(date +%s)
