@@ -62,12 +62,16 @@ fi
 echo "Running SPAdes for $SAMPLE_NAME"
 start_time=$(date +%s)
 
-spades -1 $r1 -2 $r2 --careful --threads $NCPU --cov-cutoff 2 --tmp-dir /path/to/temporary_directory -o $OUTDIR/$SAMPLE_NAME
+if spades -1 "$r1" -2 "$r2" \
+    --careful \
+    --threads "$ncpu" \
+    --cov-cutoff 2 \
+    --tmp-dir "/tmp/jc452792" \
+    -o "$OUTDIR/$SAMPLE_NAME"; then
 
-end_time=$(date +%s)
+    end_time=$(date +%s)
     runtime=$((end_time - start_time))
-    echo "$SAMPLE_NAME SUCCESSFUL runtime=$((runtime/3600))h $(((runtime%3600)/60))m $((runtime%60))s" \
-        | tee -a "$LOG"
+    echo "$SAMPLE_NAME SUCCESSFUL runtime=$((runtime/3600))h $(((runtime%3600)/60))m $((runtime%60))s" | tee -a "$LOG"
 else
     echo "$SAMPLE_NAME FAILED at $(date)" | tee -a "$LOG"
     exit 1
