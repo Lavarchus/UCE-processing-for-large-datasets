@@ -64,7 +64,7 @@ start_time=$(date +%s)
 
 if spades -1 "$r1" -2 "$r2" \
     --careful \
-    --threads "$ncpu" \
+    --threads "$NCPU" \
     --cov-cutoff 2 \
     --tmp-dir "/path/to/temporary_directory" \
     -o "$OUTDIR/$SAMPLE_NAME"; then
