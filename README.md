@@ -23,6 +23,7 @@ Others steps can be facillitated by running easy shell scripts. This repository 
 * Phyluce v1.7.3 - to process UCE from targeted capture sequencing. See pipeline details on https://phyluce.readthedocs.io/en/latest/tutorials/tutorial-1.html
 * SPAdes v3.15 - to assemble contig
 * MAFFT v7.505 - to generate alignments for e.g. phylogenetic inference
+* CIAlign v1.1.0 - to correct alignments
 * IQTREE v2.2 - to conduct phylogenetic inferences
 <br><br>
 * trimmed reads (left_reads.fastq.gz) - containing the left reads of paired-end sequencing
@@ -32,7 +33,7 @@ Others steps can be facillitated by running easy shell scripts. This repository 
 
 ### Assemble contigs with SPAdes
 
-Before assembling your contigs, reads should have been trimmed from adapters and quality controlled (e.g. using FastQC).
+Before assembling your contigs, reads should have been trimmed from adapters and quality controlled (e.g. using trimmomatic or fastp, FastQC, & Co).
 This step will take some time to run, so let's run it as an array job to basically duplicate the job and process multiple samples in parallel.
 To create an array job in you need to add the PBS directive -J followed by the number of samples or indices in the script PBS header. It will look something like this:
 
