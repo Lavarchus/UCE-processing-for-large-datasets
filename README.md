@@ -350,11 +350,11 @@ phyluce_align_get_trimmed_alignments_from_untrimmed \
     --log-path ${LOGS} \
     --cores 10
 
-# Internal trimming with Gblocks is not supported anymore. Use TrimAl instead, which is an in between edge and internal trimming.
-#echo "----- Running: Trimming filtered alignments with trimal -----"
-#phyluce_align_get_trimal_trimmed_alignments_from_untrimmed \
+# Internal trimming with Gblocks (div >50 mya). Another trimming method that's available is TrimAl (phyluce_align_get_trimal_trimmed_alignments_from_untrimmed)
+#echo "----- Running: Internal trimming filtered alignments with GBlocks -----"
+#phyluce_align_get_gblocks_trimmed_alignments_from_untrimmed \
 #  --alignments ${OUTDIR}/${BATCH}/3_mafft_filtered \
-#  --output ${OUTDIR}/${BATCH}/4_mafft_trimal_trimmed \
+#  --output ${OUTDIR}/${BATCH}/4_mafft_internal_trimmed \
 #  --input-format nexus \
 #  --log-path ${LOGS} \
 #  --cores 10
@@ -403,7 +403,7 @@ done
 
 echo "-------- Finished running CIAlign --------"
 
-# Put all the corrected alignments together
+# Put all the corrected alignments together and have a look at the png files outputted by CIAlign, you can visualise the before/after correction, which I think is really cool!
 mkdir -p $OUT_ALN/all_cialign_alns
 for file in $OUT_ALN/*_cleaned.fasta; do
   uce=$(basename $file .fasta_cleaned.fasta | cut -d_ -f2)
