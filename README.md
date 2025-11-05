@@ -265,11 +265,18 @@ echo "----- RUNNING MAFFT ALIGNMENT -----"
 for fasta in ${IN}/*.unaligned.fasta; do
   uce=$(basename "$fasta" .unaligned.fasta)
 
-  # Count sequences in fasta files - mafft will stop running if there is only 1 sequence
-  nseqs=$(grep -c "^>" ${fasta})
+# Check if output already exist and skip if it does - useful when rerunning
+  if [ -f "$output_file" ]; then
+    echo "${uce}: output already exists. Skipped." >> "$LOG"
+    continue
+  fi
 
-  if [ "$nseqs" -le 1 ]; then
-    echo "${uce}: was not be aligned because contained only 1 sequence." >> ${LOG}
+# Count sequences in fasta files - mafft will stop running if if you don't go over a specified threshold (e.g. if you know that you'll do at least a 50+ % taxon complete matrix then might as well only align the reads that fit that criteria to speed things up)
+  threshold=$((${taxa_number} / 2)) # set your threshold - here 50% taxon completness
+  nseqs=$(grep -c "^>" "$fasta")
+
+  if [ "$nseqs" -lt "$threshold" ]; then
+    echo "${uce}: was not be aligned because contained sequence(s) for less than $threshold samples (50%). Skipped." >> "$LOG"
     continue #this makes sure that fasta files with only sequence will be skipped
   fi
 
